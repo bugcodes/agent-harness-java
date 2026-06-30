@@ -1,0 +1,146 @@
+package com.bugwiki.harness.feishu;
+
+import com.bugwiki.harness.context.Session;
+import com.bugwiki.harness.context.SessionManager;
+import com.bugwiki.harness.engine.AgentEngine;
+import com.bugwiki.harness.schema.Message;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.lark.oapi.Client;
+import com.lark.oapi.event.EventDispatcher;
+import com.lark.oapi.service.im.ImService;
+import com.lark.oapi.service.im.v1.model.EventMessage;
+import com.lark.oapi.service.im.v1.model.P2MessageReadV1;
+import com.lark.oapi.service.im.v1.model.P2MessageReceiveV1;
+import java.nio.file.Path;
+
+/**
+ * 接入飞书消息事件，为每个会话动态创建 Agent 引擎并处理审批口令。
+ *
+ * @author zhaobinjie
+ * @date 2026-06-30
+ */
+public class FeishuBot {
+    private static final ObjectMapper MAPPER = new ObjectMapper();
+
+    private final Client client;
+    private final String appId;
+    private final String appSecret;
+    private final Path workDir;
+    private final AgentEngineFactory factory;
+
+    public FeishuBot(AgentEngineFactory factory, Path workDir) {
+        this(factory, workDir, System.getenv("FEISHU_APP_ID"), System.getenv("FEISHU_APP_SECRET"));
+    }
+
+    public FeishuBot(AgentEngineFactory factory, Path workDir, String appId, String appSecret) {
+        if (isBlank(appId) || isBlank(appSecret)) {
+            throw new IllegalStateException("请设置 FEISHU_APP_ID 和 FEISHU_APP_SECRET");
+        }
+        this.factory = factory;
+        this.workDir = workDir;
+        this.appId = appId;
+        this.appSecret = appSecret;
+        this.client = Client.newBuilder(appId, appSecret).build();
+    }
+
+    public Client getClient() {
+        return client;
+    }
+
+    public String getAppId() {
+        return appId;
+    }
+
+    public String getAppSecret() {
+        return appSecret;
+    }
+
+    public EventDispatcher getEventDispatcher() {
+        String encryptKey = env("FEISHU_ENCRYPT_KEY");
+        String verifyToken = env("FEISHU_VERIFY_TOKEN");
+        return EventDispatcher.newBuilder(verifyToken, encryptKey)
+                .onP2MessageReceiveV1(
+                        new ImService.P2MessageReceiveV1Handler() {
+                            @Override
+                            public void handle(P2MessageReceiveV1 event) {
+                                EventMessage message = event.getEvent().getMessage();
+                                String content = extractText(message.getContent());
+                                String chatId = message.getChatId();
+                                System.out.printf("[Feishu] 收到会话 %s 消息: %s%n", chatId, content);
+                                handleIncomingMessage(chatId, content);
+                            }
+                        })
+                .onP2MessageReadV1(
+                        new ImService.P2MessageReadV1Handler() {
+                            @Override
+                            public void handle(P2MessageReadV1 event) {
+                                // 消息已读事件，静默忽略。
+                            }
+                        })
+                .build();
+    }
+
+    public void handleIncomingMessage(String chatId, String content) {
+        if (content.startsWith("approve ")) {
+            String taskId = content.substring("approve ".length()).trim();
+            ApprovalManager.GLOBAL.resolveApproval(taskId, true, "人类管理员已批准操作");
+            System.out.printf("[Feishu] 会话 %s: ✅ 已为您批准任务 %s%n", chatId, taskId);
+            return;
+        }
+        if (content.startsWith("reject ")) {
+            String taskId = content.substring("reject ".length()).trim();
+            ApprovalManager.GLOBAL.resolveApproval(taskId, false, "人类管理员认为该操作存在极高风险，已无情拒绝");
+            System.out.printf("[Feishu] 会话 %s: 🚫 已拒绝任务 %s%n", chatId, taskId);
+            return;
+        }
+
+        Thread worker = new Thread(() -> handleAgentRun(chatId, content));
+        worker.setName("feishu-agent-" + chatId);
+        worker.start();
+    }
+
+    public void handleAgentRun(String chatId, String prompt) {
+        FeishuReporter reporter = new FeishuReporter(client, chatId);
+        try {
+            Session session = SessionManager.GLOBAL.getOrCreate(chatId, workDir);
+            session.append(Message.user(prompt));
+            AgentEngine engine = factory.create(session);
+            engine.run(session, reporter);
+        } catch (Exception ex) {
+            reporter.sendMsg("❌ Agent 运行崩溃: " + ex.getMessage());
+        }
+    }
+
+    private String extractText(String content) {
+        if (content == null || content.isBlank()) {
+            return "";
+        }
+        try {
+            JsonNode node = MAPPER.readTree(content);
+            JsonNode text = node.get("text");
+            return text == null ? content : text.asText();
+        } catch (Exception ignored) {
+            return content;
+        }
+    }
+
+    private static boolean isBlank(String value) {
+        return value == null || value.isBlank();
+    }
+
+    private static String env(String name) {
+        String value = System.getenv(name);
+        return value == null ? "" : value;
+    }
+
+    /**
+     * 根据当前会话创建绑定账本与工具注册表的 Agent 引擎。
+     *
+     * @author zhaobinjie
+     * @date 2026-06-30
+     */
+    public interface AgentEngineFactory {
+        AgentEngine create(Session session);
+    }
+}

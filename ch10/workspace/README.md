@@ -1,0 +1,1 @@
+project_key=front_demo_secret
