@@ -7,7 +7,14 @@
 
 用 Java 17 手写一套 Agent Harness，从最小 CLI 骨架开始，逐章实现模型调用、工具系统、上下文管理、审批中间件、子 Agent、评测、追踪和 AgentOps 入口。
 
-这个项目是 `build-agent-harness-from-scratch` 教程的 Java 学习版。每个 `chXX` 都是独立 Maven module，适合在 IDEA 中按章节打开、阅读和运行。
+这个项目是 [`build-agent-harness-from-scratch`](https://github.com/bigwhite/publication/tree/master/column/timegeek/build-agent-harness-from-scratch) 的 Java 学习复刻版。每个 `chXX` 都是独立 Maven module，适合在 IDEA 中按章节打开、阅读和运行。
+
+## Credits
+
+吃水不忘挖井人。本项目的章节设计、学习路径和核心思路来源于 Bigwhite 的原始 Go 教程：
+
+- Original tutorial: [`bigwhite/publication/column/timegeek/build-agent-harness-from-scratch`](https://github.com/bigwhite/publication/tree/master/column/timegeek/build-agent-harness-from-scratch)
+- Java port: this repository rewrites the tutorial as Java 17 + Maven modules under `com.bugwiki.harness`, and adapts the model provider configuration to MiniMax / OpenAI-compatible APIs.
 
 ## Features
 
